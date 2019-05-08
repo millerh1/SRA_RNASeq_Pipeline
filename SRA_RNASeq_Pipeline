@@ -247,7 +247,7 @@ LOGFILE=Code/pipeLineLog.txt
       source ~/miniconda3/etc/profile.d/conda.sh
       conda activate newEnv
       # TEcount
-      TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/gencode.v30.annotation.gtf --TE $GENOME_DIR/Assembly_Files/GRCh38_rmsk_TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
+      TEcount --verbose 3 --stranded $strand $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
       # Deactivate it
       conda deactivate
       
