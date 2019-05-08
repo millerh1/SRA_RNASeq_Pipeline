@@ -1,0 +1,276 @@
+#!/bin/bash
+
+#### THE COMPLETE RNA SEQ PIPELINE FOR SRA INPUT READS ####
+
+# Get the install directory
+BIN_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_DIR=$BIN_DIR/SRA_RNASeq_Pipeline_Files
+
+function usage {
+    echo
+    echo "SRA_RNASeq_Pipeline [-r run_info_file] [-p project_directory] [-g genome_directory] [-P num_threads]"
+    echo
+    echo "  -r|--run_info_file       fileName          Runinfo Table file which contains 'Run' (SRR) and 'Experiment' (SRX) columns"
+    echo "  -s|--species             <human|mouse>     Select 'human' or 'mouse' [default = 'human']."
+    echo "  -p|--project_directory   dirName           Name of project directory. [default = 'RNASeq_SRA_Pipeline_Project']"
+    echo "  -g|--genome_directory    dirName           Name of genome directory built with SRA_RNASeq_Pipeline_Genome_Build [default = package_dir/genome_build]"
+    echo "  -P|--num_threads         N                 Specify number of threads to utilize for commands [default = 1]"
+    echo "  -h|--help                                  Display usage info"
+    echo
+    exit 1
+}
+
+# if less than one arguments supplied, display usage 
+if [  $# -le 1 ] 
+then 
+	usage
+	exit 1
+fi 
+ 
+# check whether user had supplied -h or --help . If yes display usage 
+if [[ ( $# == "--help") ||  $# == "-h" ]] 
+then 
+	usage
+	exit 0
+fi 
+
+# Argparse
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -r) RUN_INFO="$2"; shift 2;;
+    -s) SPECIES="$2"; shift 2;;
+    -p) PROJECT_DIR="$2"; shift 2;;
+    -g) GENOME_DIR="$2"; shift 2;;
+    -P) THREADS="$2"; shift 2;;
+
+    --run_info_file=*) RUN_INFO="${1#*=}"; shift 1;;
+    --species=*) SPECIES="${1#*=}"; shift 1;;
+    --project_directory=*) PROJECT_DIR="${1#*=}"; shift 1;;
+    --genome_directory=*) GENOME_DIR="${1#*=}"; shift 1;;
+    --num_threads=*) THREADS="${1#*=}"; shift 1;;
+    --run_info_file) echo "$1 requires an argument" >&2; exit 1;;
+
+    -*) echo "unknown option: $1" >&2; exit 1;;
+    *) handle_argument "$1"; shift 1;;
+  esac
+done
+
+# Set defaults for variables not supplied
+SPECIES=${SPECIES:="human"}
+THREADS=${THREADS:=1}
+GENOME_DIR=${GENOME_DIR:=$SCRIPT_DIR/genome_build}
+if [ ! -d $GENOME_DIR ]; then
+  echo "Genome dir not found -- exiting"
+  exit 1
+fi
+GENOME_DIR=$GENOME_DIR/$SPECIES
+if [ ! -d $GENOME_DIR ]; then
+  echo "$SPECIES genome subdir not found -- exiting"
+  exit 1
+fi
+PROJECT_DIR=${PROJECT_DIR:=RNASeq_SRA_Pipeline_Project}
+
+RIGHT_NOW=$(date +"%x %r %Z")
+echo Beginning RNASeq SRA Pipeline at: $RIGHT_NOW
+
+# Set working directory
+if [ ! -d $PROJECT_DIR ]; then
+  mkdir $PROJECT_DIR
+fi
+cd $PROJECT_DIR
+
+# Create directory structure
+(
+mkdir Data
+mkdir Data/Bam_Files
+mkdir Data/Bam_Files/Splicing_Bams
+mkdir Data/Bam_Files/TE_Bams
+mkdir Data/Raw_Reads
+mkdir Results
+mkdir Results/Salmon.out
+mkdir Results/TEcount.out
+mkdir Results/STAR-Fusion.out
+mkdir Code
+mkdir Data/tmp
+) &>/dev/null
+
+# Clean input file since it originates from windows
+dos2unix $RUN_INFO &>/dev/null
+
+# Isolate the runList
+cat $RUN_INFO > Code/runInfo_Table.txt # Save a copy in the code dir
+cat $RUN_INFO | tr -s '\t' ',' | csvcut -c Run > Code/Accession_List.txt
+
+### MAIN PIPELINE ###
+
+#Output stderr to a log file
+LOGFILE=Code/pipeLineLog.txt
+
+(
+  echo "$(date "+%m%d%Y %T") : Starting work"
+      
+  # This is needed for STAR later
+  ulimit -n 10000   
+    
+  # While loop -- grabs SRA accession and/or file name and performs opperations
+  while read line
+  do
+    if [ $line == "Run" ]; then
+      continue
+    fi
+    
+    echo $line  
+    
+    ## DOWNLOAD READS AND MERGE MULTI-LANE FASTQS ##
+    
+    # R script to test for + merge technical replicates
+    # Don't forget this bit:
+    # chmod +x Code/techReps.R
+    techReps=$($SCRIPT_DIR/techReps.R $line $RUN_INFO)
+    if [ $techReps != "no" ]; then
+      if [ $techReps == "skip" ]; then
+        echo "Already merged siblings ... skipping"
+        continue
+      else
+        echo "Technical replicates detected -- downloading and merging ..."
+        # Create temporary download dir
+        mkdir Data/tmp/toMerge
+        # Download all the SRA accessions for files to be merged
+        while read file
+        do
+          if [ $file != "V1" ]; then
+            # Download file
+            fastq-dump -O Data/tmp/toMerge --split-files $file
+            # Cat first mate/SE reads
+            cat Data/tmp/toMerge/$file"_1.fastq" >> Data/Raw_Reads/$line"_1.fastq"
+            # Check to see if 2nd mate -- then merge if true
+            if [ -f Data/tmp/toMerge/$file"_2.fastq" ]; then
+              cat Data/tmp/toMerge/$file"_2.fastq" >> Data/Raw_Reads/$line"_2.fastq"
+            fi
+          fi
+        done < Data/tmp/sraTempTable.txt     
+        wait
+        if [ -f Data/tmp/sraTempTable.txt ]; then
+          rm Data/tmp/sraTempTable.txt
+        fi
+        rm Data/tmp/toMerge
+      fi
+    else
+      echo "No technical replicates detected -- grabbing fastq reads from SRA ..."
+      fastq-dump -O Data/Raw_Reads --split-files $line
+    fi
+  
+    ## MAIN CODE ##
+    
+    # Testing single-end vs paired-end
+    if [ -f Data/Raw_Reads/$line"_2.fastq" ]; then
+      echo Paired End
+      
+      ## SALMON CODE ##
+      echo "SALMON!"
+      # Salmon quant -- for DGE and DTU
+      salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -1 Data/Raw_Reads/$line"_1.fastq" -2 Data/Raw_Reads/$line"_2.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS
+      
+      ### TE COUNT CODE ###
+      echo "TE COUNT!"
+      # STAR  for TEcount
+      mkdir Data/Bam_Files/TE_Bams/$line
+      STAR --winAnchorMultimapNmax 100 --outFilterMultimapNmax 100 --genomeLoad LoadAndKeep --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" Data/Raw_Reads/$line"_2.fastq" --outFileNamePrefix Data/Bam_Files/TE_Bams/$line/Result 
+      samtools view -b -@ $THREADS -o Data/Bam_Files/TE_Bams/$line/$line.bam Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+      
+      # R Script to get strandedness info
+      # Don't forget this bit:
+      # chmod +x Code/getStrandedInfo.R
+      strand=$($SCRIPT_DIR/getStrandednessInfo.R $line)
+      
+      # Needs python2 for this
+      source ~/miniconda3/etc/profile.d/conda.sh      
+      conda activate newEnv
+      # TEcount
+      TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
+      # deactivate environment
+      conda deactivate
+      
+      
+      # Remove old files
+      rm Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+      rm Data/Bam_Files/TE_Bams/$line/$line.bam
+      
+      ## STAR FUSION CODE ##
+      echo "STAR FUSION!"
+      # Need to increase number of allowed threads or this will crash
+      ulimit -n 10000
+      # Star fusion main command
+      ~/bin/STAR-Fusion-v1.6.0/STAR-Fusion --left_fq Data/Raw_Reads/$line"_1.fastq" --right_fq Data/Raw_Reads/$line"_2.fastq" --genome_lib_dir $GENOME_DIR/ctat_genome_lib_build_dir/ --CPU $THREADS --output_dir Results/STAR-Fusion.out/$line --examine_coding_effect --FusionInspector inspect --FusionInspector validate --extract_fusion_reads
+      
+      ### Splicing Bams CODE ###
+      echo "SPLICING STAR!"
+      # This code generates Bams for Splicing, QoRTS, and Leafcutter
+      mkdir Data/Bam_Files/Splicing_Bams/$line
+      # STAR for Splicing
+      STAR --outSAMstrandField intronMotif --twopassMode Basic --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" Data/Raw_Reads/$line"_2.fastq" --outFileNamePrefix Data/Bam_Files/Splicing_Bams/$line/Result
+      
+      # Sort output sam and convert to bam + index
+      samtools view -b -@ $THREADS -o Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
+      samtools sort -@ $THREADS -o Data/Bam_Files/Splicing_Bams/$line/$line.bam Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam 
+      # Index it both ways just incase...
+      samtools index Data/Bam_Files/Splicing_Bams/$line/$line.bam Data/Bam_Files/Splicing_Bams/$line/$line.bai
+      samtools index Data/Bam_Files/Splicing_Bams/$line/$line.bam && rm Data/Raw_Reads/$line"_1.fastq" && rm Data/Raw_Reads/$line"_2.fastq"
+      
+      # Remove old files 
+      rm Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
+      rm Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam
+      
+    else
+      
+      ## SINGLE END READ CODE ##
+      echo Single End
+      
+      ## SALMON CODE ##
+      echo "SALMON!"
+      # Salmon quant -- for DGE and DTU
+      salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -r Data/Raw_Reads/$line"_1.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS
+      
+      ### TE COUNT CODE ###
+      echo "TE COUNT!"
+      # STAR  for TEcount
+      mkdir Data/Bam_Files/TE_Bams/$line
+      STAR --winAnchorMultimapNmax 100 --outFilterMultimapNmax 100 --genomeLoad LoadAndKeep --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" --outFileNamePrefix Data/Bam_Files/TE_Bams/$line/Result 
+      samtools view -b -@ $THREADS -o Data/Bam_Files/TE_Bams/$line/$line.bam Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+      
+      # R Script to get strandedness info
+      # Don't forget this bit:
+      # chmod +x Code/getStrandedInfo.R
+      strand=$($SCRIPT_DIR/getStrandednessInfo.R $line)
+      
+      # Needs python2 for this
+      source ~/miniconda3/etc/profile.d/conda.sh
+      conda activate newEnv
+      # TEcount
+      TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/gencode.v30.annotation.gtf --TE $GENOME_DIR/Assembly_Files/GRCh38_rmsk_TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
+      # Deactivate it
+      conda deactivate
+      
+      # Remove old files
+      rm Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+      rm Data/Bam_Files/TE_Bams/$line/$line.bam
+      
+    fi
+    
+  done < Code/Accession_List.txt
+  wait
+  
+  echo "$(date "+%m%d%Y %T") : Done"
+  
+) |& tee $LOGFILE 
+
+
+
+
+
+
+
+
+
+
+

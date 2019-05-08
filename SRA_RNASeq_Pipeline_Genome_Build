@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# Get the install directory
+BIN_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_DIR=$BIN_DIR/SRA_RNASeq_Pipeline_Files
+
+function usage {
+    echo
+    echo "SRA_RNASeq_Pipeline_Genome_Build [ -s <human|mouse>] [-P num_threads] [ -g genome_directory]"
+    echo
+    echo "  -s|--species                  <human|mouse>     Select 'human' or 'mouse' [default = 'human']."
+    echo "  -g|--genome_directory         genome_dir        Choose genome build location [default = package_dir/genome_build]"
+    echo "  -P|--num_threads              N                 Specify number of threads to utilize for commands [default = 1]"
+    echo "  -h|--help                                       Display usage info"
+    echo
+    exit 1
+}
+ 
+# check whether user had supplied -h or --help . If yes display usage 
+if [[ ( $# == "--help") ||  $# == "-h" ]] 
+then 
+	usage
+	exit 0
+fi 
+
+# Argparse
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -s) SPECIES="$2"; shift 2;;
+    -g) GENOME_DIR="$2"; shift 2;;
+    -P) THREADS="$2"; shift 2;;
+
+    --species=*) SPECIES="${1#*=}"; shift 1;;
+    --genome_directory=*) GENOME_DIR="${1#*=}"; shift 1;;
+    --num_threads=*) THREADS="${1#*=}"; shift 1;;
+    --species|--num_threads) echo "$1 requires an argument" >&2; exit 1;;
+
+    -*) echo "unknown option: $1" >&2; exit 1;;
+    *) handle_argument "$1"; shift 1;;
+  esac
+done
+
+# Set defaults for variables not supplied
+GENOME_DIR=${GENOME_DIR:=$SCRIPT_DIR/genome_build}
+if [ ! -d $GENOME_DIR ]; then
+  mkdir $GENOME_DIR
+fi
+
+SPECIES=${SPECIES:=human}
+
+break
+THREADS=${THREADS:=1}
+
+#Output stderr to a log file
+LOGFILE=$GENOME_DIR/buildLog.$SPECIES.txt
+
+(
+  RIGHT_NOW=$(date +"%x %r %Z")
+  echo Beginning RNASeq SRA Pipeline Genome Build at: $RIGHT_NOW
+   
+  echo "$(date "+%m%d%Y %T") : Starting genome build"
+  if [ $SPECIES == human ]
+  then
+    mkdir $GENOME_DIR/human 
+    if [ ! -d $GENOME_DIR/human/ctat_genome_lib_build_dir ]; then
+      # Get CTAT library
+      wget -O $GENOME_DIR/human/ctat_genome_lib_build_dir.tar.gz https://data.broadinstitute.org/Trinity/CTAT_RESOURCE_LIB/GRCh38_gencode_v29_CTAT_lib_Mar272019.plug-n-play.tar.gz
+      tar -xvzf $GENOME_DIR/human/GRCh38_gencode_v29_CTAT_lib_Mar272019.plug-n-play.tar.gz -C $GENOME_DIR/human
+      cp -r $GENOME_DIR/human/GRCh38_gencode_v29_CTAT_lib_Mar272019.plug-n-play/ctat_genome_lib_build_dir $GENOME_DIR/human/
+      rm -r $GENOME_DIR/human/GRCh38_gencode_v29_CTAT_lib_Mar272019.plug-n-play
+      rm $GENOME_DIR/human/GRCh38_gencode_v29_CTAT_lib_Mar272019.plug-n-play.tar.gz
+    fi
+    
+    # Get the genome files from gencode and hammell lab
+    mkdir $GENOME_DIR/human/Fasta_Files
+    wget -O $GENOME_DIR/human/Fasta_Files/GRCh38.primary_assembly.genome.fa.gz ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_30/GRCh38.primary_assembly.genome.fa.gz
+    wget -O $GENOME_DIR/human/Fasta_Files/gencode.v30.transcripts.fa.gz ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_30/gencode.v30.transcripts.fa.gz
+    mkdir $GENOME_DIR/human/Assembly_Files
+    wget -O $GENOME_DIR/human/Assembly_Files/Genes.gtf.gz ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_30/gencode.v30.annotation.gtf.gz
+    wget -O $GENOME_DIR/human/Assembly_Files/TE.gtf.gz http://labshare.cshl.edu/shares/mhammelllab/www-data/TEToolkit/TE_GTF/GRCh38_rmsk_TE.gtf.gz
+    # Unzip compressed files
+    find $GENOME_DIR/human -name "*.gz" -exec gunzip {} \;
+    # Prep for Salmon
+    salmon index --gencode -t $GENOME_DIR/human/Fasta_Files/gencode.v30.transcripts.fa -i $GENOME_DIR/human/Salmon_Transcripts_Index/ -p 80
+    # Prep for STAR
+    mkdir $GENOME_DIR/human/STAR_Genome_Index
+    STAR --runThreadN $THREADS --runMode genomeGenerate --genomeDir $GENOME_DIR/human/STAR_Genome_Index/ --genomeFastaFiles $GENOME_DIR/human/Fasta_Files/GRCh38.primary_assembly.genome.fa --sjdbGTFfile $GENOME_DIR/human/Assembly_Files/Genes.gtf
+    
+    echo "$(date "+%m%d%Y %T") : Done"
+  
+  elif [ $SPECIES == mouse ]
+  then
+    mkdir $GENOME_DIR/mouse
+    if [ ! -d $GENOME_DIR/mouse/ctat_genome_lib_build_dir ]; then
+      wget -O $GENOME_DIR/mouse/Mouse_gencode_M20_CTAT_lib_Mar272019.plug-n-play.tar.gz https://data.broadinstitute.org/Trinity/CTAT_RESOURCE_LIB/Mouse_gencode_M20_CTAT_lib_Mar272019.plug-n-play.tar.gz 
+      tar -xvzf $GENOME_DIR/mouse/Mouse_gencode_M20_CTAT_lib_Mar272019.plug-n-play.tar.gz -C $GENOME_DIR/mouse/
+      cp -r $GENOME_DIR/mouse/Mouse_gencode_M20_CTAT_lib_Mar272019.plug-n-play/ctat_genome_lib_build_dir $GENOME_DIR/mouse/
+      rm -r $GENOME_DIR/mouse/Mouse_gencode_M20_CTAT_lib_Mar272019.plug-n-play
+      rm $GENOME_DIR/mouse/Mouse_gencode_M20_CTAT_lib_Mar272019.plug-n-play.tar.gz
+    fi
+    
+    # Get the genome files from gencode and hammell lab
+    mkdir $GENOME_DIR/mouse/Fasta_Files
+    wget -O $GENOME_DIR/mouse/Fasta_Files/GRCm38.primary_assembly.genome.fa.gz ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M21/GRCm38.primary_assembly.genome.fa.gz
+    wget -O $GENOME_DIR/mouse/Fasta_Files/gencode.vM21.transcripts.fa.gz ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M21/gencode.vM21.transcripts.fa.gz
+    mkdir $GENOME_DIR/mouse/Assembly_Files
+    wget -O $GENOME_DIR/mouse/Assembly_Files/Genes.gtf.gz ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M21/gencode.vM21.annotation.gtf.gz
+    wget -O $GENOME_DIR/mouse/Assembly_Files/TE.gtf.gz http://labshare.cshl.edu/shares/mhammelllab/www-data/TEToolkit/TE_GTF/GRCm38_rmsk_TE.gtf.gz
+    # Unzip compressed files
+    find $GENOME_DIR/mouse -name "*.gz" -exec gunzip {} \;
+    # Prep for Salmon
+    salmon index --gencode -t $GENOME_DIR/mouse/Fasta_Files/gencode.vM21.transcripts.fa -i $GENOME_DIR/mouse/Salmon_Transcripts_Index/ -p 80
+    # Prep for STAR
+    mkdir $GENOME_DIR/mouse/STAR_Genome_Index
+    STAR --runThreadN $THREADS --runMode genomeGenerate --genomeDir $GENOME_DIR/mouse/STAR_Genome_Index/ --genomeFastaFiles $GENOME_DIR/mouse/Fasta_Files/GRCm38.primary_assembly.genome.fa --sjdbGTFfile $GENOME_DIR/mouse/Assembly_Files/Genes.gtf
+    
+    echo "$(date "+%m%d%Y %T") : Done"
+      
+  fi
+
+) |& tee $LOGFILE 
+
+
+
+
