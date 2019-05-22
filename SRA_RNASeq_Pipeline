@@ -8,20 +8,21 @@ SCRIPT_DIR=$BIN_DIR/SRA_RNASeq_Pipeline_Files
 
 function usage {
     echo
-    echo "SRA_RNASeq_Pipeline [-r run_info_file] [-p project_directory] [-g genome_directory] [-P num_threads]"
+    echo "SRA_RNASeq_Pipeline [-r run_info_file] [-p project_directory] [-g genome_directory] [-P num_threads] [-c conda_env]"
     echo
-    echo "  -r|--run_info_file       fileName          Runinfo Table file which contains 'Run' (SRR) and 'Experiment' (SRX) columns"
+    echo "  -r|--run_info_file       fileName          Runinfo Table file - contains 'Run' (SRR) and 'Experiment' (SRX) columns"
     echo "  -s|--species             <human|mouse>     Select 'human' or 'mouse' [default = 'human']."
     echo "  -p|--project_directory   dirName           Name of project directory. [default = 'RNASeq_SRA_Pipeline_Project']"
-    echo "  -g|--genome_directory    dirName           Name of genome directory built with SRA_RNASeq_Pipeline_Genome_Build [default = package_dir/genome_build]"
-    echo "  -P|--num_threads         N                 Specify number of threads to utilize for commands [default = 1]"
+    echo "  -g|--genome_directory    dirName           Name of genome directory. [default = package_dir/genome_build]"
+    echo "  -P|--num_threads         N                 Specify number of threads. [default = 1]"
+    echo "  -c|--conda_env           env name          Conda environment name with python 2.7 and TEtoolkit installed."
     echo "  -h|--help                                  Display usage info"
     echo
     exit 1
 }
 
 # if less than one arguments supplied, display usage 
-if [  $# -le 1 ] 
+if [  $# -le 2 ] 
 then 
 	usage
 	exit 1
@@ -42,12 +43,14 @@ while [ "$#" -gt 0 ]; do
     -p) PROJECT_DIR="$2"; shift 2;;
     -g) GENOME_DIR="$2"; shift 2;;
     -P) THREADS="$2"; shift 2;;
+    -c) CONDAENV="$2"; shift 2;;
 
     --run_info_file=*) RUN_INFO="${1#*=}"; shift 1;;
     --species=*) SPECIES="${1#*=}"; shift 1;;
     --project_directory=*) PROJECT_DIR="${1#*=}"; shift 1;;
     --genome_directory=*) GENOME_DIR="${1#*=}"; shift 1;;
     --num_threads=*) THREADS="${1#*=}"; shift 1;;
+    --conda_env=*) CONDAENV="${1#*=}"; shift 1;;
     --run_info_file) echo "$1 requires an argument" >&2; exit 1;;
 
     -*) echo "unknown option: $1" >&2; exit 1;;
@@ -69,6 +72,11 @@ if [ ! -d $GENOME_DIR ]; then
   exit 1
 fi
 PROJECT_DIR=${PROJECT_DIR:=RNASeq_SRA_Pipeline_Project}
+
+if [ -z ${CONDAENV+x} ]; then
+  echo "User must supply name of a conda environment with python 2.7 and TEtoolkit installed."
+  exit 1
+fi
 
 RIGHT_NOW=$(date +"%x %r %Z")
 echo Beginning RNASeq SRA Pipeline at: $RIGHT_NOW
@@ -157,7 +165,9 @@ LOGFILE=Code/pipeLineLog.txt
       fi
     else
       echo "No technical replicates detected -- grabbing fastq reads from SRA ..."
-      fastq-dump -O Data/Raw_Reads --split-files $line
+      if [ ! -f Data/Raw_Reads/$line"_1.fastq" ]; then
+        fastq-dump -O Data/Raw_Reads --split-files $line
+      fi
     fi
   
     ## MAIN CODE ##
@@ -185,7 +195,7 @@ LOGFILE=Code/pipeLineLog.txt
       
       # Needs python2 for this
       source ~/miniconda3/etc/profile.d/conda.sh      
-      conda activate newEnv
+      conda activate $CONDAENV
       # TEcount
       TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
       # deactivate environment
@@ -220,6 +230,8 @@ LOGFILE=Code/pipeLineLog.txt
       # Remove old files 
       rm Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
       rm Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam
+      rm Data/Raw_Reads/$line"_1.fastq"
+      rm Data/Raw_Reads/$line"_2.fastq"
       
     else
       
@@ -245,15 +257,16 @@ LOGFILE=Code/pipeLineLog.txt
       
       # Needs python2 for this
       source ~/miniconda3/etc/profile.d/conda.sh
-      conda activate newEnv
+      conda activate $CONDAENV
       # TEcount
-      TEcount --verbose 3 --stranded $strand $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
+      TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
       # Deactivate it
       conda deactivate
       
       # Remove old files
       rm Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
       rm Data/Bam_Files/TE_Bams/$line/$line.bam
+      rm Data/Raw_Reads/$line"_1.fastq"
       
     fi
     
@@ -263,14 +276,5 @@ LOGFILE=Code/pipeLineLog.txt
   echo "$(date "+%m%d%Y %T") : Done"
   
 ) |& tee $LOGFILE 
-
-
-
-
-
-
-
-
-
 
 
