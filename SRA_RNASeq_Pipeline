@@ -8,15 +8,18 @@ SCRIPT_DIR=$BIN_DIR/SRA_RNASeq_Pipeline_Files
 
 function usage {
     echo
-    echo "SRA_RNASeq_Pipeline [-r run_info_file] [-p project_directory] [-g genome_directory] [-P num_threads] [-c conda_env]"
+    echo "SRA_RNASeq_Pipeline [-a SRA_acc_list] [-s species] [-p project_directory] [-t tests] [-g genome_directory] [-P num_threads] [-c conda_env] "
     echo
-    echo "  -r|--run_info_file       fileName          Runinfo Table file - contains 'Run' (SRR) and 'Experiment' (SRX) columns"
-    echo "  -s|--species             <human|mouse>     Select 'human' or 'mouse' [default = 'human']."
-    echo "  -p|--project_directory   dirName           Name of project directory. [default = 'RNASeq_SRA_Pipeline_Project']"
-    echo "  -g|--genome_directory    dirName           Name of genome directory. [default = package_dir/genome_build]"
-    echo "  -P|--num_threads         N                 Specify number of threads. [default = 1]"
-    echo "  -c|--conda_env           env name          Conda environment name with python 2.7 and TEtoolkit installed."
-    echo "  -h|--help                                  Display usage info"
+    echo "  -a|--sra_acc_list        file      List of either srr or srx accessions in txt file - One accession per line."
+    echo "  -s|--species             string    Select 'human' or 'mouse' [default = 'human']."
+    echo "  -p|--project_directory   dir       Name of project directory. [default = 'RNASeq_SRA_Pipeline_Project']"
+    echo "  -t|--tests               string    's' [salmon], 't' [TECount], 'S' [Splicing-STAR], 'f' [STAR-Fusion]. Default: 'stSf'"
+    echo "  -g|--genome_directory    dir       Name of genome directory. [default = package_dir/genome_build]"
+    echo "  -P|--num_threads         int       Specify number of threads. [default = 1]"
+    echo "  -c|--conda_env           env       If 't' in tests, name of conda env with python 2.7 and TEtoolkit installed."
+    echo "  --force_spliceSE                   Not recommended: If 'S' in tests, single-end reads are run with splicing STAR."
+    echo "  --force_fusionSE                   Not recommended: If 'f' in tests, single-end reads are run with STAR-fusion."
+    echo "  -h|--help                          Display usage info"
     echo
     exit 1
 }
@@ -38,20 +41,24 @@ fi
 # Argparse
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -r) RUN_INFO="$2"; shift 2;;
+    -a) RUN_INFO="$2"; shift 2;;
     -s) SPECIES="$2"; shift 2;;
     -p) PROJECT_DIR="$2"; shift 2;;
+    -t) TESTS="$2"; shift 2;;
     -g) GENOME_DIR="$2"; shift 2;;
     -P) THREADS="$2"; shift 2;;
     -c) CONDAENV="$2"; shift 2;;
 
-    --run_info_file=*) RUN_INFO="${1#*=}"; shift 1;;
+    --sra_acc_list=*) RUN_INFO="${1#*=}"; shift 1;;
     --species=*) SPECIES="${1#*=}"; shift 1;;
     --project_directory=*) PROJECT_DIR="${1#*=}"; shift 1;;
+    --tests=*) TESTS="${1#*=}"; shift 1;;
     --genome_directory=*) GENOME_DIR="${1#*=}"; shift 1;;
     --num_threads=*) THREADS="${1#*=}"; shift 1;;
     --conda_env=*) CONDAENV="${1#*=}"; shift 1;;
-    --run_info_file) echo "$1 requires an argument" >&2; exit 1;;
+    --force_spliceSE) FSS="${1#*=}"; shift 1;;
+    --force_fusionSE) FSF="${1#*=}"; shift 1;;
+    --sra_acc_list) echo "$1 requires an argument" >&2; exit 1;;
 
     -*) echo "unknown option: $1" >&2; exit 1;;
     *) handle_argument "$1"; shift 1;;
@@ -61,6 +68,7 @@ done
 # Set defaults for variables not supplied
 SPECIES=${SPECIES:="human"}
 THREADS=${THREADS:=1}
+TESTS=${TESTS:="stSf"}
 GENOME_DIR=${GENOME_DIR:=$SCRIPT_DIR/genome_build}
 if [ ! -d $GENOME_DIR ]; then
   echo "Genome dir not found -- exiting"
@@ -73,11 +81,12 @@ if [ ! -d $GENOME_DIR ]; then
 fi
 PROJECT_DIR=${PROJECT_DIR:=RNASeq_SRA_Pipeline_Project}
 
-if [ -z ${CONDAENV+x} ]; then
-  echo "User must supply name of a conda environment with python 2.7 and TEtoolkit installed."
-  exit 1
+if echo $TESTS | grep -q 't'; then
+  if [ -z ${CONDAENV+x} ]; then
+    echo "To run TECount, user must supply name of a conda environment with python 2.7 and TEtoolkit installed."
+    exit 1
+  fi
 fi
-
 RIGHT_NOW=$(date +"%x %r %Z")
 echo Beginning RNASeq SRA Pipeline at: $RIGHT_NOW
 
@@ -105,8 +114,12 @@ mkdir Data/tmp
 # Clean input file since it originates from windows
 dos2unix $RUN_INFO &>/dev/null
 
-# Isolate the runList
-cat $RUN_INFO > Code/runInfo_Table.txt # Save a copy in the code dir
+# Isolate the runList and convert to table
+$SCRIPT_DIR/get_srx_from_srr.R $RUN_INFO $PROJECT_DIR # Get SRR/SRX table and save a copy in the code dir
+
+#cat $RUN_INFO > Code/runInfo_Table.txt 
+# Save a copy in the code dir
+RUN_INFO=Code/runInfo_Table.txt
 cat $RUN_INFO | tr -s '\t' ',' | csvcut -c Run > Code/Accession_List.txt
 
 ### MAIN PIPELINE ###
@@ -148,7 +161,9 @@ LOGFILE=Code/pipeLineLog.txt
         do
           if [ $file != "V1" ]; then
             # Download file
-            fastq-dump -O Data/tmp/toMerge --split-files $file
+            echo $file
+            parallel-fastq-dump -t $THREADS -s $file --split-files -O Data/tmp/toMerge --tmpdir Data/tmp
+            #fastq-dump -O Data/tmp/toMerge --split-files $file
             # Cat first mate/SE reads
             cat Data/tmp/toMerge/$file"_1.fastq" >> Data/Raw_Reads/$line"_1.fastq"
             # Check to see if 2nd mate -- then merge if true
@@ -161,12 +176,13 @@ LOGFILE=Code/pipeLineLog.txt
         if [ -f Data/tmp/sraTempTable.txt ]; then
           rm Data/tmp/sraTempTable.txt
         fi
-        rm Data/tmp/toMerge
+        rm -rf Data/tmp/toMerge
       fi
     else
       echo "No technical replicates detected -- grabbing fastq reads from SRA ..."
       if [ ! -f Data/Raw_Reads/$line"_1.fastq" ]; then
-        fastq-dump -O Data/Raw_Reads --split-files $line
+        parallel-fastq-dump -t $THREADS -s $line --split-files -O Data/Raw_Reads --tmpdir Data/tmp
+        #fastq-dump -O Data/Raw_Reads --split-files $line
       fi
     fi
   
@@ -176,60 +192,68 @@ LOGFILE=Code/pipeLineLog.txt
     if [ -f Data/Raw_Reads/$line"_2.fastq" ]; then
       echo Paired End
       
-      ## SALMON CODE ##
-      echo "SALMON!"
-      # Salmon quant -- for DGE and DTU
-      salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -1 Data/Raw_Reads/$line"_1.fastq" -2 Data/Raw_Reads/$line"_2.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS
+      if echo $TESTS | grep -q 's'; then
+        ## SALMON CODE ##
+        echo "SALMON!"
+        # Salmon quant -- for DGE and DTU
+        salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -1 Data/Raw_Reads/$line"_1.fastq" -2 Data/Raw_Reads/$line"_2.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS
+      fi
       
-      ### TE COUNT CODE ###
-      echo "TE COUNT!"
-      # STAR  for TEcount
-      mkdir Data/Bam_Files/TE_Bams/$line
-      STAR --winAnchorMultimapNmax 100 --outFilterMultimapNmax 100 --genomeLoad LoadAndKeep --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" Data/Raw_Reads/$line"_2.fastq" --outFileNamePrefix Data/Bam_Files/TE_Bams/$line/Result 
-      samtools view -b -@ $THREADS -o Data/Bam_Files/TE_Bams/$line/$line.bam Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+      if echo $TESTS | grep -q 't'; then
+        ### TE COUNT CODE ###
+        echo "TE COUNT!"
+        # STAR  for TEcount
+        mkdir Data/Bam_Files/TE_Bams/$line
+        STAR --winAnchorMultimapNmax 100 --outFilterMultimapNmax 100 --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" Data/Raw_Reads/$line"_2.fastq" --outFileNamePrefix Data/Bam_Files/TE_Bams/$line/Result 
+        samtools view -b -@ $THREADS -o Data/Bam_Files/TE_Bams/$line/$line.bam Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+        
+        # R Script to get strandedness info
+        # Don't forget this bit:
+        # chmod +x Code/getStrandedInfo.R
+        strand=$($SCRIPT_DIR/getStrandednessInfo.R $line)
+        
+        # Needs python2 for this
+        source ~/miniconda3/etc/profile.d/conda.sh      
+        conda activate $CONDAENV
+        # TEcount
+        TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
+        # deactivate environment
+        conda deactivate
       
-      # R Script to get strandedness info
-      # Don't forget this bit:
-      # chmod +x Code/getStrandedInfo.R
-      strand=$($SCRIPT_DIR/getStrandednessInfo.R $line)
+        # Remove old files
+        rm Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+        rm Data/Bam_Files/TE_Bams/$line/$line.bam
+      fi
       
-      # Needs python2 for this
-      source ~/miniconda3/etc/profile.d/conda.sh      
-      conda activate $CONDAENV
-      # TEcount
-      TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
-      # deactivate environment
-      conda deactivate
+      if echo $TESTS | grep -q 'f'; then
+        ## STAR FUSION CODE ##
+        echo "STAR FUSION!"
+        # Need to increase number of allowed threads or this will crash
+        ulimit -n 10000
+        # Star fusion main command
+        ~/bin/STAR-Fusion-v1.6.0/STAR-Fusion --left_fq Data/Raw_Reads/$line"_1.fastq" --right_fq Data/Raw_Reads/$line"_2.fastq" --genome_lib_dir $GENOME_DIR/ctat_genome_lib_build_dir/ --CPU $THREADS --output_dir Results/STAR-Fusion.out/$line --examine_coding_effect --FusionInspector inspect --FusionInspector validate --extract_fusion_reads
+      fi
       
+      if echo $TESTS | grep -q 'S'; then
+        ### Splicing Bams CODE ###
+        echo "SPLICING STAR!"
+        # This code generates Bams for Splicing, QoRTS, and Leafcutter
+        mkdir Data/Bam_Files/Splicing_Bams/$line
+        # STAR for Splicing
+        STAR --outSAMstrandField intronMotif --twopassMode Basic --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" Data/Raw_Reads/$line"_2.fastq" --outFileNamePrefix Data/Bam_Files/Splicing_Bams/$line/Result
+        
+        # Sort output sam and convert to bam + index
+        samtools view -b -@ $THREADS -o Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
+        samtools sort -@ $THREADS -o Data/Bam_Files/Splicing_Bams/$line/$line.bam Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam 
+        # Index it both ways just incase...
+        samtools index Data/Bam_Files/Splicing_Bams/$line/$line.bam Data/Bam_Files/Splicing_Bams/$line/$line.bai
+        samtools index Data/Bam_Files/Splicing_Bams/$line/$line.bam 
+        
+        # Remove old files 
+        rm Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
+        rm Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam
+      fi
       
-      # Remove old files
-      rm Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
-      rm Data/Bam_Files/TE_Bams/$line/$line.bam
-      
-      ## STAR FUSION CODE ##
-      echo "STAR FUSION!"
-      # Need to increase number of allowed threads or this will crash
-      ulimit -n 10000
-      # Star fusion main command
-      ~/bin/STAR-Fusion-v1.6.0/STAR-Fusion --left_fq Data/Raw_Reads/$line"_1.fastq" --right_fq Data/Raw_Reads/$line"_2.fastq" --genome_lib_dir $GENOME_DIR/ctat_genome_lib_build_dir/ --CPU $THREADS --output_dir Results/STAR-Fusion.out/$line --examine_coding_effect --FusionInspector inspect --FusionInspector validate --extract_fusion_reads
-      
-      ### Splicing Bams CODE ###
-      echo "SPLICING STAR!"
-      # This code generates Bams for Splicing, QoRTS, and Leafcutter
-      mkdir Data/Bam_Files/Splicing_Bams/$line
-      # STAR for Splicing
-      STAR --outSAMstrandField intronMotif --twopassMode Basic --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" Data/Raw_Reads/$line"_2.fastq" --outFileNamePrefix Data/Bam_Files/Splicing_Bams/$line/Result
-      
-      # Sort output sam and convert to bam + index
-      samtools view -b -@ $THREADS -o Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
-      samtools sort -@ $THREADS -o Data/Bam_Files/Splicing_Bams/$line/$line.bam Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam 
-      # Index it both ways just incase...
-      samtools index Data/Bam_Files/Splicing_Bams/$line/$line.bam Data/Bam_Files/Splicing_Bams/$line/$line.bai
-      samtools index Data/Bam_Files/Splicing_Bams/$line/$line.bam && rm Data/Raw_Reads/$line"_1.fastq" && rm Data/Raw_Reads/$line"_2.fastq"
-      
-      # Remove old files 
-      rm Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
-      rm Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam
       rm Data/Raw_Reads/$line"_1.fastq"
       rm Data/Raw_Reads/$line"_2.fastq"
       
@@ -238,36 +262,77 @@ LOGFILE=Code/pipeLineLog.txt
       ## SINGLE END READ CODE ##
       echo Single End
       
-      ## SALMON CODE ##
-      echo "SALMON!"
-      # Salmon quant -- for DGE and DTU
-      salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -r Data/Raw_Reads/$line"_1.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS
+      if echo $TESTS | grep -q 's'; then
+        ## SALMON CODE ##
+        echo "SALMON!"
+        # Salmon quant -- for DGE and DTU
+        salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -r Data/Raw_Reads/$line"_1.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS
+      fi
       
-      ### TE COUNT CODE ###
-      echo "TE COUNT!"
-      # STAR  for TEcount
-      mkdir Data/Bam_Files/TE_Bams/$line
-      STAR --winAnchorMultimapNmax 100 --outFilterMultimapNmax 100 --genomeLoad LoadAndKeep --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" --outFileNamePrefix Data/Bam_Files/TE_Bams/$line/Result 
-      samtools view -b -@ $THREADS -o Data/Bam_Files/TE_Bams/$line/$line.bam Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+      if echo $TESTS | grep -q 's'; then      
+        ### TE COUNT CODE ###
+        echo "TE COUNT!"
+        # STAR  for TEcount
+        mkdir Data/Bam_Files/TE_Bams/$line
+        STAR --winAnchorMultimapNmax 100 --outFilterMultimapNmax 100 --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" --outFileNamePrefix Data/Bam_Files/TE_Bams/$line/Result 
+        samtools view -b -@ $THREADS -o Data/Bam_Files/TE_Bams/$line/$line.bam Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+        
+        # R Script to get strandedness info
+        # Don't forget this bit:
+        # chmod +x Code/getStrandedInfo.R
+        strand=$($SCRIPT_DIR/getStrandednessInfo.R $line)
+        
+        # Needs python2 for this
+        source ~/miniconda3/etc/profile.d/conda.sh
+        conda activate $CONDAENV
+        # TEcount
+        TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
+        # Deactivate it
+        conda deactivate
+        
+        # Remove old files
+        rm Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
+        rm Data/Bam_Files/TE_Bams/$line/$line.bam
+        rm Data/Raw_Reads/$line"_1.fastq"
+      fi
       
-      # R Script to get strandedness info
-      # Don't forget this bit:
-      # chmod +x Code/getStrandedInfo.R
-      strand=$($SCRIPT_DIR/getStrandednessInfo.R $line)
+      if echo $TESTS | grep -q 'f'; then
+        if [ ! -z "$FSF" ]; then
+          ## STAR FUSION CODE ##
+          echo "STAR FUSION!"
+          # Need to increase number of allowed threads or this will crash
+          ulimit -n 10000
+          # Star fusion main command
+          ~/bin/STAR-Fusion-v1.6.0/STAR-Fusion --left_fq Data/Raw_Reads/$line"_1.fastq" --genome_lib_dir $GENOME_DIR/ctat_genome_lib_build_dir/ --CPU $THREADS --output_dir Results/STAR-Fusion.out/$line --examine_coding_effect --FusionInspector inspect --FusionInspector validate --extract_fusion_reads
+        else
+          echo WARNING: STAR Fusion not run on single-end data. You can override this behavior by adding --force_fusionSE option.
+        fi
+      fi
       
-      # Needs python2 for this
-      source ~/miniconda3/etc/profile.d/conda.sh
-      conda activate $CONDAENV
-      # TEcount
-      TEcount --verbose 3 --stranded $strand --GTF $GENOME_DIR/Assembly_Files/Genes.gtf --TE $GENOME_DIR/Assembly_Files/TE.gtf -b Data/Bam_Files/TE_Bams/$line/$line.bam --project Results/TEcount.out/$line
-      # Deactivate it
-      conda deactivate
-      
-      # Remove old files
-      rm Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
-      rm Data/Bam_Files/TE_Bams/$line/$line.bam
-      rm Data/Raw_Reads/$line"_1.fastq"
-      
+      if echo $TESTS | grep -q 'S'; then
+        if [ ! -z "$FSS" ]; then
+          ### Splicing Bams CODE ###
+          echo "SPLICING STAR!"
+          # This code generates Bams for Splicing, QoRTS, and Leafcutter
+          mkdir Data/Bam_Files/Splicing_Bams/$line
+          # STAR for Splicing
+          STAR --outSAMstrandField intronMotif --twopassMode Basic --genomeDir $GENOME_DIR/STAR_Genome_Index --runThreadN $THREADS --readFilesIn Data/Raw_Reads/$line"_1.fastq" --outFileNamePrefix Data/Bam_Files/Splicing_Bams/$line/Result
+          
+          # Sort output sam and convert to bam + index
+          samtools view -b -@ $THREADS -o Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
+          samtools sort -@ $THREADS -o Data/Bam_Files/Splicing_Bams/$line/$line.bam Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam 
+          # Index it both ways just incase...
+          samtools index Data/Bam_Files/Splicing_Bams/$line/$line.bam Data/Bam_Files/Splicing_Bams/$line/$line.bai
+          samtools index Data/Bam_Files/Splicing_Bams/$line/$line.bam 
+          
+          # Remove old files 
+          rm Data/Bam_Files/Splicing_Bams/$line/ResultAligned.out.sam
+          rm Data/Bam_Files/Splicing_Bams/$line/$line.raw.bam
+
+        else
+          echo WARNING: Splicing STAR not run on single-end data. You can override this behavior by adding --force_spliceSE option.
+        fi
+      fi
     fi
     
   done < Code/Accession_List.txt
