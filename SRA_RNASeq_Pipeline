@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#### THE COMPLETE RNA SEQ PIPELINE FOR SRA INPUT READS ####
+#### THE COMPLETE RNA SEQ PIPELINE FOR SRA INPUT READS *** also does Synapse too now *** ####
 
 # Get the install directory
 BIN_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -8,18 +8,33 @@ SCRIPT_DIR=$BIN_DIR/SRA_RNASeq_Pipeline_Files
 
 function usage {
     echo
-    echo "SRA_RNASeq_Pipeline [-a SRA_acc_list] [-s species] [-p project_directory] [-t tests] [-g genome_directory] [-P num_threads] [-c conda_env] "
+    echo "SRA_RNASeq_Pipeline [-a SRA_acc_list] [-s species] [-p project_directory] [-t tests] [-g genome_directory] [-P num_threads] "
     echo
     echo "  -a|--sra_acc_list        file      List of either srr or srx accessions in txt file - One accession per line."
     echo "  -s|--species             string    Select 'human' or 'mouse' [default = 'human']."
     echo "  -p|--project_directory   dir       Name of project directory. [default = 'RNASeq_SRA_Pipeline_Project']"
-    echo "  -t|--tests               string    's' [salmon], 't' [TECount], 'S' [Splicing-STAR], 'f' [STAR-Fusion]. Default: 'stSf'"
+    echo "  -t|--tests               string    's' [salmon] 't' [TECount] 'S' [Splicing-STAR] 'f' [STAR-Fusion] Default: 'stSf'"
     echo "  -g|--genome_directory    dir       Name of genome directory. [default = package_dir/genome_build]"
     echo "  -P|--num_threads         int       Specify number of threads. [default = 1]"
-    echo "  -c|--conda_env           env       If 't' in tests, name of conda env with python 2.7 and TEtoolkit installed."
+    echo "  --python27_env           env       If 't' in tests, name of conda env with python 2.7 and TEtoolkit installed."
+    echo "  --SF_env                 env       Conda ENV with STAR-Fusion and STAR 2.7.0 [Due to conflict with 2.7.1]."
+    echo "  --fastp                            Use fastp to perform adapter trimming, filtering, and fastq QC."
     echo "  --force_spliceSE                   Not recommended: If 'S' in tests, single-end reads are run with splicing STAR."
     echo "  --force_fusionSE                   Not recommended: If 'f' in tests, single-end reads are run with STAR-fusion."
-    echo "  -h|--help                          Display usage info"
+    echo "  --synapseID              synID     Parent of desired file directory."
+    echo "  --synapseMergeFile       TSV file  Mapping from downloaded files to sample names [required for synapse fastqs]."                
+    echo "  --username               string    Synapse username for downloading data (if --synapse is specified)."
+    echo "  --help                             Display usage info"
+    echo
+    echo
+    echo 
+    echo "  EXAMPLES"
+    echo 
+    echo "  Running salmon and splicing STAR on a newline-separated list of SRA accessions with fastp filtering/trimming:" 
+    echo "  SRA_RNASeq_Pipeline -a accList.txt -p sraTest/ -t sS -P 80 --fastp "
+    echo
+    echo "  Running all tests on a folder of mouse fastq files identified by the synapse ID syn123456:"
+    echo "  SRA_RNASeq_Pipeline -s mouse -p synapseTest/ --synapse --synapseID=syn123456 --synapseMergeFile=synMerge.txt --username=uName12 --python27_env=python27Env --SF_env=STAR270Env"
     echo
     exit 1
 }
@@ -30,13 +45,10 @@ then
 	usage
 	exit 1
 fi 
- 
-# check whether user had supplied -h or --help . If yes display usage 
-if [[ ( $# == "--help") ||  $# == "-h" ]] 
-then 
-	usage
-	exit 0
-fi 
+
+
+# Source conda
+source $CONDA_PREFIX/etc/profile.d/conda.sh
 
 # Argparse
 while [ "$#" -gt 0 ]; do
@@ -48,7 +60,7 @@ while [ "$#" -gt 0 ]; do
     -g) GENOME_DIR="$2"; shift 2;;
     -P) THREADS="$2"; shift 2;;
     -c) CONDAENV="$2"; shift 2;;
-
+    
     --sra_acc_list=*) RUN_INFO="${1#*=}"; shift 1;;
     --species=*) SPECIES="${1#*=}"; shift 1;;
     --project_directory=*) PROJECT_DIR="${1#*=}"; shift 1;;
@@ -56,14 +68,40 @@ while [ "$#" -gt 0 ]; do
     --genome_directory=*) GENOME_DIR="${1#*=}"; shift 1;;
     --num_threads=*) THREADS="${1#*=}"; shift 1;;
     --conda_env=*) CONDAENV="${1#*=}"; shift 1;;
+    --SF_env=*) STARENV="${1#*=}"; shift 1;;
     --force_spliceSE) FSS="${1#*=}"; shift 1;;
     --force_fusionSE) FSF="${1#*=}"; shift 1;;
-    --sra_acc_list) echo "$1 requires an argument" >&2; exit 1;;
+    --fastp) FP="${1#*=}"; shift 1;;
+    --synapseID=*) SYNID="${1#*=}"; shift 1;;
+    --synapseMergeFile=*) synapseMergeFile="${1#*=}"; shift 1;;            
+    --username=*) USERR="${1#*=}"; shift 1;;
+    --help) HELP="${1#*=}"; shift 1;;
 
     -*) echo "unknown option: $1" >&2; exit 1;;
     *) handle_argument "$1"; shift 1;;
   esac
 done
+
+# If specified, display usage info
+if [ ! -z "$HELP" ]; then
+  usage
+  exit 1
+fi
+
+if [ ! -z "$SYNID" ]; then
+  echo $USERR
+  if [ -z "$USERR" ]; then
+    echo "ERROR: To run synapse, you must specify your synapse user name."
+    usage
+    exit 1
+  fi
+  # Read Password
+  echo -n Password: 
+  read -s PASS
+  echo
+    
+fi
+
 
 # Set defaults for variables not supplied
 SPECIES=${SPECIES:="human"}
@@ -80,6 +118,7 @@ if [ ! -d $GENOME_DIR ]; then
   exit 1
 fi
 PROJECT_DIR=${PROJECT_DIR:=RNASeq_SRA_Pipeline_Project}
+PROJECT_DIR=$(realpath $PROJECT_DIR)
 
 if echo $TESTS | grep -q 't'; then
   if [ -z ${CONDAENV+x} ]; then
@@ -103,6 +142,9 @@ mkdir Data/Bam_Files
 mkdir Data/Bam_Files/Splicing_Bams
 mkdir Data/Bam_Files/TE_Bams
 mkdir Data/Raw_Reads
+mkdir Data/QC
+mkdir Data/QC/HTML
+mkdir Data/QC/JSON
 mkdir Results
 mkdir Results/Salmon.out
 mkdir Results/TEcount.out
@@ -111,16 +153,31 @@ mkdir Code
 mkdir Data/tmp
 ) &>/dev/null
 
-# Clean input file since it originates from windows
-dos2unix $RUN_INFO &>/dev/null
+if [ ! -z "$SYNID" ]; then
+  # Get the synapse to filename mapping
+  python $SCRIPT_DIR/getSynapse.py $SYNID $USERR $PASS Code/
+  if [ ! -z "$synapseMergeFile" ]; then
+    dos2unix $synapseMergeFile &>/dev/null
+  fi
+  fileType=$(Rscript $SCRIPT_DIR/checkExtension_Synapse.R)
+  #cat $RUN_INFO > Code/runInfo_Table.txt 
+  # Save a copy in the code dir
+  RUN_INFO=Code/synapse.csv
+  cat $RUN_INFO | tr -s '\t' ',' | csvcut -c synID > Code/Accession_List.txt
+else
+  # Clean input file since it originates from windows
+  dos2unix $RUN_INFO &>/dev/null
+  
+  # Isolate the runList and convert to table
+  $SCRIPT_DIR/get_srx_from_srr.R $RUN_INFO $PROJECT_DIR # Get SRR/SRX table and save a copy in the code dir
+  
+  #cat $RUN_INFO > Code/runInfo_Table.txt 
+  # Save a copy in the code dir
+  RUN_INFO=Code/runInfo_Table.txt
+  cat $RUN_INFO | tr -s '\t' ',' | csvcut -c Run > Code/Accession_List.txt
+fi
 
-# Isolate the runList and convert to table
-$SCRIPT_DIR/get_srx_from_srr.R $RUN_INFO $PROJECT_DIR # Get SRR/SRX table and save a copy in the code dir
 
-#cat $RUN_INFO > Code/runInfo_Table.txt 
-# Save a copy in the code dir
-RUN_INFO=Code/runInfo_Table.txt
-cat $RUN_INFO | tr -s '\t' ',' | csvcut -c Run > Code/Accession_List.txt
 
 ### MAIN PIPELINE ###
 
@@ -147,56 +204,165 @@ LOGFILE=Code/pipeLineLog.txt
     # R script to test for + merge technical replicates
     # Don't forget this bit:
     # chmod +x Code/techReps.R
-    techReps=$($SCRIPT_DIR/techReps.R $line $RUN_INFO)
-    if [ $techReps != "no" ]; then
-      if [ $techReps == "skip" ]; then
-        echo "Already merged siblings ... skipping"
-        continue
-      else
-        echo "Technical replicates detected -- downloading and merging ..."
-        # Create temporary download dir
-        mkdir Data/tmp/toMerge
-        # Download all the SRA accessions for files to be merged
-        while read file
-        do
-          if [ $file != "V1" ]; then
-            # Download file
-            echo $file
-            parallel-fastq-dump -t $THREADS -s $file --split-files -O Data/tmp/toMerge --tmpdir Data/tmp
-            #fastq-dump -O Data/tmp/toMerge --split-files $file
-            # Cat first mate/SE reads
-            cat Data/tmp/toMerge/$file"_1.fastq" >> Data/Raw_Reads/$line"_1.fastq"
-            # Check to see if 2nd mate -- then merge if true
-            if [ -f Data/tmp/toMerge/$file"_2.fastq" ]; then
-              cat Data/tmp/toMerge/$file"_2.fastq" >> Data/Raw_Reads/$line"_2.fastq"
+    if [ -z $SYNID ]; then 
+      if [ ! -f Data/Raw_Reads/$line"_1.fastq" ] ; then
+        techReps=$(Rscript $SCRIPT_DIR/techReps.R $line $RUN_INFO)
+        if [ $techReps != "no" ]; then
+          if [ $techReps == "skip" ]; then
+            echo "Already merged siblings ... skipping"
+            continue
+          else
+            echo "Technical replicates detected -- downloading and merging ..."
+            # Create temporary download dir
+            mkdir Data/tmp/toMerge
+            # Download all the SRA accessions for files to be merged
+            while read file
+            do
+              if [ $file != "V1" ]; then
+                # Download file
+                echo $file
+                parallel-fastq-dump -t $THREADS -s $file --split-files -O Data/tmp/toMerge --tmpdir Data/tmp
+                #fastq-dump -O Data/tmp/toMerge --split-files $file
+                # Cat first mate/SE reads
+                cat Data/tmp/toMerge/$file"_1.fastq" >> Data/Raw_Reads/$line"_1.fastq"
+                # Check to see if 2nd mate -- then merge if true
+                if [ -f Data/tmp/toMerge/$file"_2.fastq" ]; then
+                  cat Data/tmp/toMerge/$file"_2.fastq" >> Data/Raw_Reads/$line"_2.fastq"
+                fi
+              fi
+            done < Data/tmp/sraTempTable.txt     
+            wait
+            if [ -f Data/tmp/sraTempTable.txt ]; then
+              rm Data/tmp/sraTempTable.txt
             fi
+            rm -rf Data/tmp/toMerge
           fi
-        done < Data/tmp/sraTempTable.txt     
-        wait
-        if [ -f Data/tmp/sraTempTable.txt ]; then
-          rm Data/tmp/sraTempTable.txt
+        else
+          echo "No technical replicates detected -- grabbing fastq reads from SRA ..."
+          if [ ! -f Data/Raw_Reads/$line"_1.fastq" ]; then
+            parallel-fastq-dump -t $THREADS -s $line --split-files -O Data/Raw_Reads --tmpdir Data/tmp
+            #fastq-dump -O Data/Raw_Reads --split-files $line
+          fi
         fi
-        rm -rf Data/tmp/toMerge
+      else
+        echo "WARNING: "$line"_1.fastq exists ... skipping this sample ... "
+        continue
       fi
-    else
-      echo "No technical replicates detected -- grabbing fastq reads from SRA ..."
-      if [ ! -f Data/Raw_Reads/$line"_1.fastq" ]; then
-        parallel-fastq-dump -t $THREADS -s $line --split-files -O Data/Raw_Reads --tmpdir Data/tmp
-        #fastq-dump -O Data/Raw_Reads --split-files $line
+    else 
+      if [ $line == "synID" ]; then
+        continue
       fi
+      synapse login -u $USERR -p $PASS --rememberMe
+      mkdir Data/Raw_Reads/synDownloadTmp
+      echo $fileType
+      if [ $fileType == "fastq" ]; then
+        echo "FASTQ file input ... "
+        if [ -z "$synapseMergeFile" ]; then
+          echo
+          echo "ERROR: File type is fastq, but no synapseMergeFile is provided. This is required to handle mate pairs, file renaming, and technical replicates. The synapseMergeFile is a TSV in which the first column contains the fastq file names and the second contains corresponding sample names, patient IDs, etc, to which the file belongs. For example:" 
+          echo
+          echo "GHX9293.1.fastq.gz  patient0098_TCX"
+          echo "GHX9293.2.fastq.gz  patient0098_TCX"
+          echo
+          echo "or... in the case of technical replicates:"
+          echo
+          echo "AGTGCA_np099848_GTCACT_01_01.fastq  20092_G"
+          echo "AGTGCA_np099848_GTCACT_02_01.fastq  20092_G"
+          echo "AGTGCA_np099848_GTCACT_01_02.fastq  20092_G"
+          echo "AGTGCA_np099848_GTCACT_02_02.fastq  20092_G"
+          echo
+          exit 1
+        fi
+        
+        echo $line
+        echo "Downloading fastq files and merging any technical replicates ... "
+        techReps=$(Rscript $SCRIPT_DIR/techReps_Synapse.R $line $synapseMergeFile) # Checks for pre-existing files internally
+        echo
+        echo $techReps
+        echo
+        
+        if [ "$techReps" != "no" ]; then
+          if [ "$techReps" == "skip" ]; then
+            echo "Already merged siblings ... skipping"
+            continue
+          else
+            synapseName=$(echo "$techReps")
+            echo $synapseName
+            echo "DONE"
+          fi
+        else
+          echo "WARNING: Could not locate synapse ID in provided synapseMergeFile -- skipping"
+          continue            
+        fi
+        
+        rm -rf Data/Raw_Reads/synDownloadTmp
+        
+      elif [ $fileType == "bam" ]; then
+        echo "BAM file input ... "
+        synapse get $line --downloadLocation Data/Raw_Reads/synDownloadTmp/
+        synapseName=$(ls Data/Raw_Reads/synDownloadTmp/)
+        filename=$(basename -- "$synapseName")
+        extension="${filename##*.}"
+        echo $synapseName
+        synapseName=$(basename $synapseName .bam)
+        echo $synapseName
+        if [ ! -f Data/Raw_Reads/$synapseName"_1.fastq" ]; then 
+          echo "Checking if paired or single end ... "
+          PETEST=$(samtools view -c -f 1 Data/Raw_Reads/synDownloadTmp/$synapseName.bam)
+          COMP=2000
+          if [ "$PETEST" -gt "$COMP" ]; then
+            echo "Read is paired end!"
+            mkdir Data/Raw_Reads/bamSortTmp
+            echo "Sorting by read name ... "
+            samtools sort -n -@ $THREADS -o Data/Raw_Reads/bamSortTmp/$synapseName.bam Data/Raw_Reads/synDownloadTmp/$synapseName.bam
+            echo "DONE!"
+            echo "Converting to fastq ..."
+            bamToFastq -i Data/Raw_Reads/bamSortTmp/$synapseName.bam -fq Data/Raw_Reads/$synapseName"_1.fastq" -fq2 Data/Raw_Reads/$synapseName"_2.fastq" &>/dev/null 
+            echo "DONE"
+            echo "Removing old files ...  "
+            rm -rf Data/Raw_Reads/synDownloadTmp
+            rm -rf Data/Raw_Reads/bamSortTmp
+            echo "DONE"        
+          else
+            echo "Reads is single end!"
+            echo "Converting to fastq ..."
+            bamToFastq -i Data/Raw_Reads/synDownloadTmp/$synapseName.bam -fq Data/Raw_Reads/$synapseName"_1.fastq" &>/dev/null 
+            echo "DONE"
+            echo "Removing old files ... "
+            rm -rf Data/Raw_Reads/synDownloadTmp
+            echo "DONE"        
+          fi
+        fi
+      fi
+      
+      line=$synapseName
+      echo $line      
+      
     fi
-  
+    
+    
     ## MAIN CODE ##
     
     # Testing single-end vs paired-end
     if [ -f Data/Raw_Reads/$line"_2.fastq" ]; then
       echo Paired End
       
+      # Fastp
+      if [ ! -z "$FP" ]; then
+        echo "Running FASTP on reads ... "
+        mv Data/Raw_Reads/$line"_1.fastq" Data/Raw_Reads/$line"_1.fq"
+        mv Data/Raw_Reads/$line"_2.fastq" Data/Raw_Reads/$line"_2.fq"
+        fastp -i Data/Raw_Reads/$line"_1.fq" -o Data/Raw_Reads/$line"_1.fastq" -I Data/Raw_Reads/$line"_2.fq" -O Data/Raw_Reads/$line"_2.fastq" -h Data/QC/HTML/$line.html -j Data/QC/JSON/$line.json -w $THREADS
+        rm Data/Raw_Reads/$line"_1.fq"
+        rm Data/Raw_Reads/$line"_2.fq"
+        echo "DONE"
+      fi
+      
       if echo $TESTS | grep -q 's'; then
         ## SALMON CODE ##
         echo "SALMON!"
         # Salmon quant -- for DGE and DTU
-        salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -1 Data/Raw_Reads/$line"_1.fastq" -2 Data/Raw_Reads/$line"_2.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS
+        salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -1 Data/Raw_Reads/$line"_1.fastq" -2 Data/Raw_Reads/$line"_2.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS --gcBias 
       fi
       
       if echo $TESTS | grep -q 't'; then
@@ -230,8 +396,20 @@ LOGFILE=Code/pipeLineLog.txt
         echo "STAR FUSION!"
         # Need to increase number of allowed threads or this will crash
         ulimit -n 10000
+        if [ ! -z $STARENV ]; then
+          echo "Activating conda 2.7.0 environment."
+          conda activate $STARENV
+        fi
         # Star fusion main command
-        ~/bin/STAR-Fusion-v1.6.0/STAR-Fusion --left_fq Data/Raw_Reads/$line"_1.fastq" --right_fq Data/Raw_Reads/$line"_2.fastq" --genome_lib_dir $GENOME_DIR/ctat_genome_lib_build_dir/ --CPU $THREADS --output_dir Results/STAR-Fusion.out/$line --examine_coding_effect --FusionInspector inspect --FusionInspector validate --extract_fusion_reads
+        STAR-Fusion --left_fq Data/Raw_Reads/$line"_1.fastq" --right_fq Data/Raw_Reads/$line"_2.fastq" --genome_lib_dir $GENOME_DIR/ctat_genome_lib_build_dir/ --CPU $THREADS --output_dir Results/STAR-Fusion.out/$line --examine_coding_effect --FusionInspector inspect --FusionInspector validate --extract_fusion_reads
+        echo "DONE"
+        # Remove large old files
+        echo "Cleaning up fusion files ... "
+        find Results/STAR-Fusion.out/$line -type f -size +1G -exec rm -rf {} \;
+        echo "DONE"
+        if [ ! -z $STARENV ]; then
+          conda deactivate
+        fi
       fi
       
       if echo $TESTS | grep -q 'S'; then
@@ -262,14 +440,23 @@ LOGFILE=Code/pipeLineLog.txt
       ## SINGLE END READ CODE ##
       echo Single End
       
+      # Fastp
+      if [ ! -z "$FP" ]; then
+        echo "Running FASTP on reads ... "
+        mv Data/Raw_Reads/$line"_1.fastq" Data/Raw_Reads/$line"_1.fq"
+        fastp -i Data/Raw_Reads/$line"_1.fq" -o Data/Raw_Reads/$line"_1.fastq" -h Data/QC/HTML/$line.html -j Data/QC/JSON/$line.json -w $THREADS
+        rm Data/Raw_Reads/$line"_1.fq"
+        echo "DONE"
+      fi
+      
       if echo $TESTS | grep -q 's'; then
         ## SALMON CODE ##
         echo "SALMON!"
         # Salmon quant -- for DGE and DTU
-        salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -r Data/Raw_Reads/$line"_1.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS
+        salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -r Data/Raw_Reads/$line"_1.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS --gcBias 
       fi
       
-      if echo $TESTS | grep -q 's'; then      
+      if echo $TESTS | grep -q 't'; then      
         ### TE COUNT CODE ###
         echo "TE COUNT!"
         # STAR  for TEcount
@@ -293,7 +480,7 @@ LOGFILE=Code/pipeLineLog.txt
         # Remove old files
         rm Data/Bam_Files/TE_Bams/$line/ResultAligned.out.sam
         rm Data/Bam_Files/TE_Bams/$line/$line.bam
-        rm Data/Raw_Reads/$line"_1.fastq"
+        
       fi
       
       if echo $TESTS | grep -q 'f'; then
@@ -303,7 +490,12 @@ LOGFILE=Code/pipeLineLog.txt
           # Need to increase number of allowed threads or this will crash
           ulimit -n 10000
           # Star fusion main command
-          ~/bin/STAR-Fusion-v1.6.0/STAR-Fusion --left_fq Data/Raw_Reads/$line"_1.fastq" --genome_lib_dir $GENOME_DIR/ctat_genome_lib_build_dir/ --CPU $THREADS --output_dir Results/STAR-Fusion.out/$line --examine_coding_effect --FusionInspector inspect --FusionInspector validate --extract_fusion_reads
+          STAR-Fusion --left_fq Data/Raw_Reads/$line"_1.fastq" --genome_lib_dir $GENOME_DIR/ctat_genome_lib_build_dir/ --CPU $THREADS --output_dir Results/STAR-Fusion.out/$line --examine_coding_effect --FusionInspector inspect --FusionInspector validate --extract_fusion_reads
+          echo "DONE"
+          # Remove large old files
+          echo "Cleaning up fusion files ... "
+          find Results/STAR-Fusion.out/$line -type f -size +1G -exec rm -rf {} \;
+          echo "DONE"
         else
           echo WARNING: STAR Fusion not run on single-end data. You can override this behavior by adding --force_fusionSE option.
         fi
@@ -333,6 +525,7 @@ LOGFILE=Code/pipeLineLog.txt
           echo WARNING: Splicing STAR not run on single-end data. You can override this behavior by adding --force_spliceSE option.
         fi
       fi
+      rm Data/Raw_Reads/$line"_1.fastq"
     fi
     
   done < Code/Accession_List.txt

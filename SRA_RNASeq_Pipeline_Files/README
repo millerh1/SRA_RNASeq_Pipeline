@@ -1,0 +1,9 @@
+RNASeq_Pipeline :: An automated pipeline for preprocessing of RNA-Seq data.
+
+Input:
+
+(a) List of SRA accessions (SRR or SRX)
+(b) Choice of genome (human or mouse available)
+(c) Choice of tests to run 
+
+
