@@ -9,7 +9,7 @@ This is a pre-release of the pipeline designed for use on the UT Health San Anto
 To install: 
 
 1. Download repo -- `git clone https://github.com/millerh1/SRA_RNASeq_Pipeline.git`
-2. Copy all contents to place on `PATH` while preserving directory structure:\
+2. Copy all contents to place on `PATH` while preserving directory structure:
 
   Easy example:  
   `cp -r SRA_RNASeq_Pipeline/{SRA_RNASeq_Pipeline,SRA_RNASeq_Pipeline_Genome_Build,SRA_RNASeq_Pipeline_Files} ~/bin`  
