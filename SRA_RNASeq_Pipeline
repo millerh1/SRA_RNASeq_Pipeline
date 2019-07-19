@@ -8,30 +8,30 @@ SCRIPT_DIR=$BIN_DIR/SRA_RNASeq_Pipeline_Files
 
 function usage {
     echo
-    echo "SRA_RNASeq_Pipeline [-a SRA_acc_list] [-s species] [-p project_directory] [-t tests] [-g genome_directory] [-P num_threads] "
+    echo "SRA_RNASeq_Pipeline [-a SRP_accession] [-p project_directory] [-t tests] [-g genome_directory] [-P num_threads] "
     echo
-    echo "  -a|--sra_acc_list        file      List of either srr or srx accessions in txt file - One accession per line."
-    echo "  -s|--species             string    Select 'human' or 'mouse' [default = 'human']."
-    echo "  -p|--project_directory   dir       Name of project directory. [default = 'RNASeq_SRA_Pipeline_Project']"
-    echo "  -t|--tests               string    's' [salmon] 't' [TECount] 'S' [Splicing-STAR] 'f' [STAR-Fusion] Default: 'stSf'"
-    echo "  -g|--genome_directory    dir       Name of genome directory. [default = package_dir/genome_build]"
-    echo "  -P|--num_threads         int       Specify number of threads. [default = 1]"
-    echo "  --python27_env           env       If 't' in tests, name of conda env with python 2.7 and TEtoolkit installed."
-    echo "  --SF_env                 env       Conda ENV with STAR-Fusion and STAR 2.7.0 [Due to conflict with 2.7.1]."
-    echo "  --fastp                            Use fastp to perform adapter trimming, filtering, and fastq QC."
-    echo "  --force_spliceSE                   Not recommended: If 'S' in tests, single-end reads are run with splicing STAR."
-    echo "  --force_fusionSE                   Not recommended: If 'f' in tests, single-end reads are run with STAR-fusion."
-    echo "  --synapseID              synID     Parent of desired file directory."
-    echo "  --synapseMergeFile       TSV file  Mapping from downloaded files to sample names [required for synapse fastqs]."                
-    echo "  --username               string    Synapse username for downloading data (if --synapse is specified)."
-    echo "  --help                             Display usage info"
+    echo "  -a|--SRP_accession     SRP       SRA study accession to download data from. [e.g. SRP045672]."
+    echo "  -p|--project_dir       dir       Name of project directory. [default = 'RNASeq_SRA_Pipeline_Project']"
+    echo "  -t|--tests             string    's' [salmon] 't' [TECount] 'S' [Splicing-STAR] 'f' [STAR-Fusion] Default: 'stSf'"
+    echo "  -g|--genome_dir        dir       Name of genome directory. [default = package_dir/genome_build]"
+    echo "  -P|--num_threads       int       Specify number of threads. [default = 1]"
+    echo "  --python27_env         env       If 't' in tests, name of conda env with python 2.7 and TEtoolkit installed."
+    echo "  --SF_env               env       Conda ENV with STAR-Fusion and STAR 2.7.0 [Due to conflict with 2.7.1]."
+    echo "  --fastp                          Use fastp to perform adapter trimming, filtering, and fastq QC."
+    echo "  --force_spliceSE                 Not recommended: If 'S' in tests, single-end reads are run with splicing STAR."
+    echo "  --force_fusionSE                 Not recommended: If 'f' in tests, single-end reads are run with STAR-fusion."
+    echo "  --synapseID            synID     Parent of desired file directory."
+    echo "  --synapseSpecies       string    If --synapseID is set, specify species. ['human' or 'mouse] Default: 'human'"
+    echo "  --synapseMergeFile     file      Mapping from downloaded files to sample names [required for synapse fastqs]."                
+    echo "  --username             string    Synapse username for downloading data (if --synapse is specified)."
+    echo "  --help                           Display usage info"
     echo
     echo
     echo 
     echo "  EXAMPLES"
     echo 
-    echo "  Running salmon and splicing STAR on a newline-separated list of SRA accessions with fastp filtering/trimming:" 
-    echo "  SRA_RNASeq_Pipeline -a accList.txt -p sraTest/ -t sS -P 80 --fastp "
+    echo "  Running salmon and splicing STAR on runs listed in SRP045672 with fastp filtering/trimming:" 
+    echo "  SRA_RNASeq_Pipeline -a SRP045672 -p sraTest/ -t sS -P 80 --fastp "
     echo
     echo "  Running all tests on a folder of mouse fastq files identified by the synapse ID syn123456:"
     echo "  SRA_RNASeq_Pipeline -s mouse -p synapseTest/ --synapse --synapseID=syn123456 --synapseMergeFile=synMerge.txt --username=uName12 --python27_env=python27Env --SF_env=STAR270Env"
@@ -39,13 +39,9 @@ function usage {
     exit 1
 }
 
-# if less than one arguments supplied, display usage 
-if [  $# -le 2 ] 
-then 
-	usage
-	exit 1
-fi 
 
+
+echo "Preparing and verifying inputs ... "
 
 # Source conda
 source $CONDA_PREFIX/etc/profile.d/conda.sh
@@ -53,19 +49,17 @@ source $CONDA_PREFIX/etc/profile.d/conda.sh
 # Argparse
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -a) RUN_INFO="$2"; shift 2;;
-    -s) SPECIES="$2"; shift 2;;
+    -a) ACC="$2"; shift 2;;
     -p) PROJECT_DIR="$2"; shift 2;;
     -t) TESTS="$2"; shift 2;;
-    -g) GENOME_DIR="$2"; shift 2;;
+    -g) GENOME_DIR_TOP="$2"; shift 2;;
     -P) THREADS="$2"; shift 2;;
     -c) CONDAENV="$2"; shift 2;;
     
-    --sra_acc_list=*) RUN_INFO="${1#*=}"; shift 1;;
-    --species=*) SPECIES="${1#*=}"; shift 1;;
-    --project_directory=*) PROJECT_DIR="${1#*=}"; shift 1;;
+    --SRP_accession=*) ACC="${1#*=}"; shift 1;;
+    --project_dir=*) PROJECT_DIR="${1#*=}"; shift 1;;
     --tests=*) TESTS="${1#*=}"; shift 1;;
-    --genome_directory=*) GENOME_DIR="${1#*=}"; shift 1;;
+    --genome_dir=*) GENOME_DIR_TOP="${1#*=}"; shift 1;;
     --num_threads=*) THREADS="${1#*=}"; shift 1;;
     --conda_env=*) CONDAENV="${1#*=}"; shift 1;;
     --SF_env=*) STARENV="${1#*=}"; shift 1;;
@@ -73,6 +67,7 @@ while [ "$#" -gt 0 ]; do
     --force_fusionSE) FSF="${1#*=}"; shift 1;;
     --fastp) FP="${1#*=}"; shift 1;;
     --synapseID=*) SYNID="${1#*=}"; shift 1;;
+    --synapseSpecies=*) synapseSpecies="${1#*=}"; shift 1;;
     --synapseMergeFile=*) synapseMergeFile="${1#*=}"; shift 1;;            
     --username=*) USERR="${1#*=}"; shift 1;;
     --help) HELP="${1#*=}"; shift 1;;
@@ -89,7 +84,7 @@ if [ ! -z "$HELP" ]; then
 fi
 
 if [ ! -z "$SYNID" ]; then
-  echo $USERR
+  SPECIES=${synapseSpecies:="human"} 
   if [ -z "$USERR" ]; then
     echo "ERROR: To run synapse, you must specify your synapse user name."
     usage
@@ -99,35 +94,33 @@ if [ ! -z "$SYNID" ]; then
   echo -n Password: 
   read -s PASS
   echo
-    
+  
+elif [ -z "$ACC" ]; then
+  usage
+  exit 1  
+
 fi
 
 
 # Set defaults for variables not supplied
-SPECIES=${SPECIES:="human"}
+
 THREADS=${THREADS:=1}
 TESTS=${TESTS:="stSf"}
-GENOME_DIR=${GENOME_DIR:=$SCRIPT_DIR/genome_build}
-if [ ! -d $GENOME_DIR ]; then
-  echo "Genome dir not found -- exiting"
+GENOME_DIR_TOP=${GENOME_DIR_TOP:=$SCRIPT_DIR/genome_build}
+if [ ! -d $GENOME_DIR_TOP ]; then
+  echo "ERROR: Genome directory not found at "$GENOME_DIR_TOP" -- exiting"
   exit 1
 fi
-GENOME_DIR=$GENOME_DIR/$SPECIES
-if [ ! -d $GENOME_DIR ]; then
-  echo "$SPECIES genome subdir not found -- exiting"
-  exit 1
-fi
+
 PROJECT_DIR=${PROJECT_DIR:=RNASeq_SRA_Pipeline_Project}
 PROJECT_DIR=$(realpath $PROJECT_DIR)
 
 if echo $TESTS | grep -q 't'; then
   if [ -z ${CONDAENV+x} ]; then
-    echo "To run TECount, user must supply name of a conda environment with python 2.7 and TEtoolkit installed."
+    echo "ERROR: To run TECount, user must supply name of a conda environment with python 2.7 and TEtoolkit installed."
     exit 1
   fi
 fi
-RIGHT_NOW=$(date +"%x %r %Z")
-echo Beginning RNASeq SRA Pipeline at: $RIGHT_NOW
 
 # Set working directory
 if [ ! -d $PROJECT_DIR ]; then
@@ -137,20 +130,33 @@ cd $PROJECT_DIR
 
 # Create directory structure
 (
-mkdir Data
-mkdir Data/Bam_Files
-mkdir Data/Bam_Files/Splicing_Bams
-mkdir Data/Bam_Files/TE_Bams
-mkdir Data/Raw_Reads
-mkdir Data/QC
-mkdir Data/QC/HTML
-mkdir Data/QC/JSON
-mkdir Results
-mkdir Results/Salmon.out
-mkdir Results/TEcount.out
-mkdir Results/STAR-Fusion.out
 mkdir Code
+mkdir Data
 mkdir Data/tmp
+mkdir Data/Raw_Reads
+mkdir Results
+if [ ! -z $FP ]; then
+  mkdir Data/QC
+  mkdir Data/QC/HTML
+  mkdir Data/QC/JSON
+fi
+if echo $TESTS | grep -q 'S'; then
+  mkdir Data/Bam_Files
+  mkdir Data/Bam_Files/Splicing_Bams
+fi
+if echo $TESTS | grep -q 't'; then
+  mkdir Data/Bam_Files
+  mkdir Data/Bam_Files/TE_Bams
+  mkdir Results/TEcount.out
+fi
+
+if echo $TESTS | grep -q 's'; then
+  mkdir Results/Salmon.out
+fi
+if echo $TESTS | grep -q 'f'; then
+  mkdir Results/STAR-Fusion.out
+fi
+
 ) &>/dev/null
 
 if [ ! -z "$SYNID" ]; then
@@ -165,11 +171,17 @@ if [ ! -z "$SYNID" ]; then
   RUN_INFO=Code/synapse.csv
   cat $RUN_INFO | tr -s '\t' ',' | csvcut -c synID > Code/Accession_List.txt
 else
-  # Clean input file since it originates from windows
-  dos2unix $RUN_INFO &>/dev/null
-  
   # Isolate the runList and convert to table
-  $SCRIPT_DIR/get_srx_from_srr.R $RUN_INFO $PROJECT_DIR # Get SRR/SRX table and save a copy in the code dir
+  RES=0
+  while [ ! $RES -eq 1 ]
+  do
+    RES=$(Rscript $SCRIPT_DIR/get_SRA_info.R $ACC $PROJECT_DIR) # Get Runinfo table and save a copy in the code dir
+    if [ $RES == 'err' ]; then
+      echo "ERROR: No RNA-Seq data found for $ACC. Double-check your input and please contact package author if this appears to be a bug."
+      usage
+      exit 1
+    fi
+  done 
   
   #cat $RUN_INFO > Code/runInfo_Table.txt 
   # Save a copy in the code dir
@@ -185,7 +197,7 @@ fi
 LOGFILE=Code/pipeLineLog.txt
 
 (
-  echo "$(date "+%m%d%Y %T") : Starting work"
+  echo "$(date "+%m%d%Y %T") : Starting main pipline ... "
       
   # This is needed for STAR later
   ulimit -n 10000   
@@ -197,14 +209,25 @@ LOGFILE=Code/pipeLineLog.txt
       continue
     fi
     
-    echo $line  
-    
+            
     ## DOWNLOAD READS AND MERGE MULTI-LANE FASTQS ##
     
     # R script to test for + merge technical replicates
-    # Don't forget this bit:
-    # chmod +x Code/techReps.R
     if [ -z $SYNID ]; then 
+      echo
+      echo "SRR Accession: "$line  
+      echo
+      SPECIES=$(Rscript $SCRIPT_DIR/getSpeciesSRA.R $line)
+      echo $SPECIES
+      if [ ! "$SPECIES" == "human" ] && [ ! "$SPECIES" == "mouse" ]; then
+        echo "WARNING: species for " $line " is an unrecognized type: '"$SPECIES"'. Skipping this accession ... "
+        continue
+      fi
+      GENOME_DIR=$GENOME_DIR_TOP/$SPECIES
+      if [ ! -d $GENOME_DIR ]; then
+        echo "ERROR: $SPECIES genome subdir not found -- exiting"
+        exit 1
+      fi
       if [ ! -f Data/Raw_Reads/$line"_1.fastq" ] ; then
         techReps=$(Rscript $SCRIPT_DIR/techReps.R $line $RUN_INFO)
         if [ $techReps != "no" ]; then
@@ -220,9 +243,7 @@ LOGFILE=Code/pipeLineLog.txt
             do
               if [ $file != "V1" ]; then
                 # Download file
-                echo $file
-                parallel-fastq-dump -t $THREADS -s $file --split-files -O Data/tmp/toMerge --tmpdir Data/tmp
-                #fastq-dump -O Data/tmp/toMerge --split-files $file
+                parallel-fastq-dump -t $THREADS -s $file --split-files -O Data/tmp/toMerge --tmpdir Data/tmp &>/dev/null
                 # Cat first mate/SE reads
                 cat Data/tmp/toMerge/$file"_1.fastq" >> Data/Raw_Reads/$line"_1.fastq"
                 # Check to see if 2nd mate -- then merge if true
@@ -240,12 +261,12 @@ LOGFILE=Code/pipeLineLog.txt
         else
           echo "No technical replicates detected -- grabbing fastq reads from SRA ..."
           if [ ! -f Data/Raw_Reads/$line"_1.fastq" ]; then
-            parallel-fastq-dump -t $THREADS -s $line --split-files -O Data/Raw_Reads --tmpdir Data/tmp
+            parallel-fastq-dump -t $THREADS -s $line --split-files -O Data/Raw_Reads --tmpdir Data/tmp &>/dev/null
             #fastq-dump -O Data/Raw_Reads --split-files $line
           fi
         fi
       else
-        echo "WARNING: "$line"_1.fastq exists ... skipping this sample ... "
+        echo "WARNING: "$line"_1.fastq already exists ... skipping this sample ... "
         continue
       fi
     else 
@@ -254,7 +275,6 @@ LOGFILE=Code/pipeLineLog.txt
       fi
       synapse login -u $USERR -p $PASS --rememberMe
       mkdir Data/Raw_Reads/synDownloadTmp
-      echo $fileType
       if [ $fileType == "fastq" ]; then
         echo "FASTQ file input ... "
         if [ -z "$synapseMergeFile" ]; then
@@ -274,12 +294,8 @@ LOGFILE=Code/pipeLineLog.txt
           exit 1
         fi
         
-        echo $line
         echo "Downloading fastq files and merging any technical replicates ... "
         techReps=$(Rscript $SCRIPT_DIR/techReps_Synapse.R $line $synapseMergeFile) # Checks for pre-existing files internally
-        echo
-        echo $techReps
-        echo
         
         if [ "$techReps" != "no" ]; then
           if [ "$techReps" == "skip" ]; then
@@ -303,9 +319,7 @@ LOGFILE=Code/pipeLineLog.txt
         synapseName=$(ls Data/Raw_Reads/synDownloadTmp/)
         filename=$(basename -- "$synapseName")
         extension="${filename##*.}"
-        echo $synapseName
         synapseName=$(basename $synapseName .bam)
-        echo $synapseName
         if [ ! -f Data/Raw_Reads/$synapseName"_1.fastq" ]; then 
           echo "Checking if paired or single end ... "
           PETEST=$(samtools view -c -f 1 Data/Raw_Reads/synDownloadTmp/$synapseName.bam)
@@ -453,7 +467,7 @@ LOGFILE=Code/pipeLineLog.txt
         ## SALMON CODE ##
         echo "SALMON!"
         # Salmon quant -- for DGE and DTU
-        salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -r Data/Raw_Reads/$line"_1.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS --gcBias 
+        salmon quant -i $GENOME_DIR/Salmon_Transcripts_Index -l A -r Data/Raw_Reads/$line"_1.fastq" --validateMappings -o Results/Salmon.out/$line -p $THREADS 
       fi
       
       if echo $TESTS | grep -q 't'; then      

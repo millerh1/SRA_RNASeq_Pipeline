@@ -2,9 +2,10 @@
 
 techReps_Synapse <- function(synapseID, mergeFile) {
   
-  # # # # Bug testing
-  # mergeFile <- "~/bin/SRA_RNASeq_Pipeline_Files/Book1.txt"
+  # # # # # Bug testing
+  # mergeFile <- "~/bin/SRA_RNASeq_Pipeline_Files/synapseMergeFileExample.txt"
   # synapseID <- "syn11581335"
+  # mapFile <- "~/Bishop.lab/Preprocessing/RNA_Seq/ROSMAP_microGlia/Code/synapse.csv"
   
   #cat("\nGetting merge info for", synapseID, "...\n")
   #cat(' ')
