@@ -61,7 +61,7 @@ while [ "$#" -gt 0 ]; do
     --tests=*) TESTS="${1#*=}"; shift 1;;
     --genome_dir=*) GENOME_DIR_TOP="${1#*=}"; shift 1;;
     --num_threads=*) THREADS="${1#*=}"; shift 1;;
-    --conda_env=*) CONDAENV="${1#*=}"; shift 1;;
+    --python27_env=*) CONDAENV="${1#*=}"; shift 1;;
     --SF_env=*) STARENV="${1#*=}"; shift 1;;
     --force_spliceSE) FSS="${1#*=}"; shift 1;;
     --force_fusionSE) FSF="${1#*=}"; shift 1;;
