@@ -97,7 +97,7 @@ get_SRA_info <- function(SRP, SRAList) {
   timevec <- gsub(timevec, pattern =  " ", replacement =  "_")
   timevec <- gsub(timevec, pattern =  "-", replacement =  ".")
   fileStr <- paste0("Code/runInfo_Table_", timevec, ".csv")
-  fileStr <- paste0("runInfo_Table_", timevec, ".csv")
+  #fileStr <- paste0("runInfo_Table_", timevec, ".csv")
   write.csv(runInfo2, file = fileStr, 
               quote = F, row.names = F, sep = ",")
 
