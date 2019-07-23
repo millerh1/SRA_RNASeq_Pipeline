@@ -117,6 +117,7 @@ Full usage info:
 SRA_RNASeq_Pipeline [-a SRP_accession] [-p project_directory] [-t tests] [-g genome_directory] [-P num_threads]
 
   -a|--SRP_accession     SRP       SRA study accession to download data from. [e.g. SRP045672].
+  -l|--SRA_list          file      File with newline-separated list of SRP, SRX, and/or SRR accessions.
   -p|--project_dir       dir       Name of project directory. [default = 'RNASeq_SRA_Pipeline_Project']
   -t|--tests             string    's' [salmon] 't' [TECount] 'S' [Splicing-STAR] 'f' [STAR-Fusion] Default: 'stSf'
   -g|--genome_dir        dir       Name of genome directory. [default = package_dir/genome_build]
@@ -127,8 +128,7 @@ SRA_RNASeq_Pipeline [-a SRP_accession] [-p project_directory] [-t tests] [-g gen
   --force_spliceSE                 Not recommended: If 'S' in tests, single-end reads are run with splicing STAR.
   --force_fusionSE                 Not recommended: If 'f' in tests, single-end reads are run with STAR-fusion.
   --synapseID            synID     Parent of desired file directory.
-  --synapseSpecies       string    If --synapseID is set, specify species. ['human' or 'mouse] Default: 'human'
-  --synapseMergeFile     file      Mapping from downloaded files to sample names [required for synapse fastqs].
+  --synapseIDList        file      File with newline-separated list of synpaseIDs (samples or sample folders).
   --username             string    Synapse username for downloading data (if --synapse is specified).
   --help                           Display usage info
 ```
