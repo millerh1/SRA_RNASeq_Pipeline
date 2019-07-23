@@ -87,6 +87,8 @@ get_SRA_info <- function(SRP, SRAList) {
   n <- length(colnames(runInfo))-2
   runInfo2 <- runInfo[,c(1, 7, 11, 13, 14, 15, 16, 17, 19, 20, 21, 22, 24, 25, 27, 28, 29:n)]
   runInfo2 <- as.data.frame(runInfo2)
+  groupInfo <- gsub(groupInfo, pattern = ",", replacement = " ")
+  locationInfo <- gsub(locationInfo, pattern = ",", replacement = " ")
   runInfo2$group <- groupInfo
   runInfo2$location <- locationInfo
   
