@@ -176,7 +176,7 @@ else
 fi
 echo "Finished processing runInfo table... output stored in "$RUN_INFO # Prints success or failure message     
 # Save a copy in the code dir
-ACCNAME=$(basename $RUN_INFO .txt)
+ACCNAME=$(basename $RUN_INFO .csv)
 cat $RUN_INFO | tr -s '\t' ',' | csvcut -c Run > Code/$ACCNAME.accessionList.txt
 LOGFILE=Code/$ACCNAME.pipeLineLog.txt
 ACCLISTRUN=Code/$ACCNAME.accessionList.txt
