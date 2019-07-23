@@ -3,7 +3,7 @@
 techReps <- function(SRA, runInfoFile) {
   #runInfoFile <- "/home/UTHSCSA/millerh1/bin/SRA_RNASeq_Pipeline_Files/Code/runInfo_Table.txt"
   #SRA <- "SRR057943"
-  runInfo <- read.table(runInfoFile, sep = "\t", fill = T, header = T, stringsAsFactors = F)
+  runInfo <- read.csv(runInfoFile, fill = T, header = T, stringsAsFactors = F)
   if (SRA %in% runInfo$Run) {
     SRX <- runInfo$Experiment[which(runInfo$Run == SRA)]
     SRXdups <- runInfo$Experiment[which(duplicated(runInfo$Experiment))]

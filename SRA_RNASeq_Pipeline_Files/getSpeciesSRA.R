@@ -1,12 +1,13 @@
 #!/usr/bin/env Rscript
 
-getSpeciesSRA <- function(SRR) {
-  # # Bug testing
-  # SRR <- "SRR1555623"
-  # runInfo <- "../../proj_dir_2/Code/runInfo_Table.txt"
+getSpeciesSRA <- function(SRR, runInfo) {
+  # # # Bug testing
+  # SRR <- "SRR5527012"
+  # runInfo <- "../../Bishop.lab/EWS_CTR_All_Cells/Code/runInfo_Table_2019-07-23_09.07.29.txt"
+  # system(paste0("dos2unix ", runInfo))
+  # cat("\n", file = runInfo, append = TRUE)
   
-  runInfo <- "Code/runInfo_Table.txt"
-  runInfoTable <- read.table(runInfo, sep = "\t", header = T, stringsAsFactors = F)
+  runInfoTable <- read.csv(runInfo, header = T, stringsAsFactors = F)
   if (! "ScientificName" %in% colnames(runInfoTable)) {
     return("unknown")
   }
@@ -24,9 +25,10 @@ getSpeciesSRA <- function(SRR) {
 # Parse shell args
 args <- commandArgs(trailingOnly=TRUE)
 arg <- args[1]
+arg2 <- args[2]
 
 # Return result
-res <- getSpeciesSRA(arg)
+res <- getSpeciesSRA(arg, arg2)
 cat(res)
 
 

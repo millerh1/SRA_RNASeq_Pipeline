@@ -1,20 +1,19 @@
 #!/usr/bin/env Rscript
 
-techReps_Synapse <- function(synapseID, mergeFile) {
+techReps_Synapse <- function(synapseID, runInfo) {
   
-  # # # # # Bug testing
-  # mergeFile <- "~/bin/SRA_RNASeq_Pipeline_Files/synapseMergeFileExample.txt"
+  # # Bug testing
   # synapseID <- "syn11581335"
-  # mapFile <- "~/Bishop.lab/Preprocessing/RNA_Seq/ROSMAP_microGlia/Code/synapse.csv"
+  # map <- dbdat2
   
-  #cat("\nGetting merge info for", synapseID, "...\n")
-  #cat(' ')
-  mapFile <- "Code/synapse.csv"
-  map <- read.csv(mapFile, stringsAsFactors = F)
-  mergeFile <- read.table(mergeFile, sep = "\t", fill = T, header = T, stringsAsFactors = F)
-  colnames(mergeFile) <- c("filename", "sampleID")
-  colnames(map) <- c('filename','synID', "mate", "gz")
-  mergeFile <- merge(x = map, y = mergeFile, by = "filename", all.x = T)
+  map <- read.table(runInfo, stringsAsFactors = F, sep = "\t", header = T)
+  map$gz <- ifelse(all(grep(map$name, pattern = ".+gz$")), T, F)
+  map$mate <- 1
+  map$mate[grep(map$name, pattern = "2\\.fastq")] <- 2
+  map$mate[grep(map$name, pattern = "2\\.fq")] <- 2
+  
+  mergeFile <- map[,c(4, 3, 35, 34, 24)]
+  colnames(mergeFile) <- c('filename','synID', "mate", "gz", "sampleID")
   mergeFile <- mergeFile[order(mergeFile$sampleID, mergeFile$mate, mergeFile$synID),]
   # Now the mergeFile is in order for concatenation
   mergeFile$sampleID[which(is.null(mergeFile$sampleID))] <- mergeFile$synID[which(is.null(mergeFile$sampleID))]
